@@ -1,0 +1,1006 @@
+---
+title: "is_there_an_effect"
+author: "Leon Ivo litera"
+date: '2022-10-13'
+output: html_document
+---
+
+#working directory
+```{r}
+setwd("~/rent_control")
+```
+
+
+
+#packages
+```{r}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(readr)
+library(readxl)
+```
+
+
+#ipw estimator
+```{r}
+ipw_raw <- read_csv("~/rent_control/output/modelle/df_RC_ipw.csv")
+
+
+#clean first columne 
+#get new columnes for all informations int the fitrst one
+
+ipw_hp <- ipw_raw %>% filter(grepl('hp_', row_names))
+ipw_hp$Level <- "expensive" 
+
+ipw_mp <- ipw_raw %>% filter(grepl('mp_', row_names))
+ipw_mp$Level <- "medium" 
+
+ipw_lp <- ipw_raw %>% filter(grepl('lp_', row_names))
+ipw_lp$Level <- "affordable" 
+
+
+
+#all data set with pric class
+ipw_pc <- rbind(ipw_hp,ipw_lp,ipw_mp)
+ipw_pc_names <- levels(as.factor(ipw_pc$row_names))
+#the city level is missing a tag, therfore it muss be the eft over cases
+ipw_tc <- ipw_raw%>%filter(!row_names %in% ipw_pc_names)
+ipw_tc$Level <- "city" 
+#bind again all together
+ipw_raw <- rbind(ipw_pc, ipw_tc)
+
+#keep the environment clean
+rm(ipw_hp,ipw_lp,ipw_mp,ipw_pc,ipw_pc_names,ipw_tc)
+
+
+
+
+
+#dimension 
+ipw_inv <- ipw_raw %>% filter(grepl('_inv_', row_names))
+ipw_inv$Dimension <- "Investment ratio"
+
+ipw_fo <- ipw_raw %>% filter(grepl('_Erstbezug_', row_names))#erst sanierungs cases entfernen
+ipw_fo$Dimension <- "First occupancy"
+
+ipw_esan <- ipw_fo %>% filter(grepl('_Erstbezug_nach_Sanierung_', row_names))
+ipw_esan$Dimension <- "First occupancy after reconstruction"
+
+esan_names <- levels(as.factor(ipw_esan$row_names))
+ipw_erst <- ipw_fo%>%filter(!row_names%in%esan_names)
+rm(ipw_fo)
+
+ipw_wk <- ipw_raw %>% filter(grepl('_Gepflegt_', row_names))
+ipw_wk$Dimension <- "Well-kempt"
+
+ipw_lnew <- ipw_raw %>% filter(grepl('_Neuwertig_', row_names))
+ipw_lnew$Dimension <- "Like new"
+
+ipw_nren <- ipw_raw %>% filter(grepl('_Renovierungsbeduerftig_', row_names))
+ipw_nren$Dimension <- "Needs renovation"
+
+ipw_ucon <- ipw_raw %>% filter(grepl('_Unbekannter_Zustand_', row_names))
+ipw_ucon$Dimension <- "Unknown condition"
+
+ipw_cren <- ipw_raw %>% filter(grepl('Vollstaendig_Renoviert', row_names))
+ipw_cren$Dimension <- "Completely renovated"
+
+ipw_rec <- ipw_raw %>% filter(grepl('_saniert_', row_names))
+ipw_rec$Dimension <- "Reconstructed"
+
+ipw_mod <- ipw_raw %>% filter(grepl('_Modernisiert_', row_names))
+ipw_mod$Dimension <- "Modernised"
+
+ipw_abb <- ipw_raw %>% filter(grepl('Abbruchreif_', row_names))
+ipw_abb$Dimension <- "Ready to demolish"
+
+ipw_bya <- ipw_raw %>% filter(grepl('Nach_Vereinbarung', row_names))
+ipw_bya$Dimension <- "By agreement"
+
+
+IPW <- rbind(ipw_bya,
+             ipw_abb,
+             ipw_mod,
+             ipw_cren,
+             ipw_erst,
+             ipw_esan,
+             ipw_inv,
+             ipw_lnew,
+             ipw_nren,
+             ipw_ucon,
+             ipw_wk,
+             ipw_rec
+             )
+#keept the environment free
+rm(esan_names,ipw_bya,
+             ipw_abb,
+             ipw_mod,
+             ipw_cren,
+             ipw_erst,
+             ipw_esan,
+             ipw_inv,
+             ipw_lnew,
+             ipw_nren,
+             ipw_ucon,
+             ipw_wk,
+             ipw_rec)
+
+
+
+#vector with all dimension data frame names
+dim_vec <- c("Investment ratio",
+             "First occupancy",
+             "First occupancy after reconstruction",
+             "Like new",
+             "Modernised",
+             "Reconstructed",
+             "Completely renovated",
+             "Well-kempt",
+             "Needs renovation",
+             "By agreement",
+             "Unknown condition",
+             "Ready to demolish")
+
+level_vec<- c("city","expensive","medium","affordable")
+dim_list <- list()
+effect_ipw_list <-list()
+
+for (i in 1:length(dim_vec)) {
+  
+
+ #welhe daten sollen betrachtet werden
+ IPW_df <- IPW%>%filter(Dimension==dim_vec[[i]]) #dimension die man betrachten möchte
+
+ level_list <- list()
+ for (z in 1:length(level_vec)) {
+  
+
+  IPW_df2 <- IPW_df%>%filter(Level==level_vec[[z]])
+  #nur noch significante modelle
+  ipw_sig <- IPW_df2%>%filter(is.na(sig_5)==F)
+
+
+  #Rent control first time
+  ft_ipw <- ipw_sig%>%filter(gname=="ft_periode")
+  #Rent control first time dynamic
+  ft_dyn <- ft_ipw%>%filter(type=="dynamic")
+  sig_ft_dyn <- nrow(ft_dyn)
+  #check for effect
+  ft_dyn_e <- F
+  if(sig_ft_dyn >= 5){
+   ft_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_dyn"]] <-ft_dyn_e
+
+  #rent control first time group
+  ft_grp <- ft_ipw%>%filter(type=="group")
+  sig_ft_grp <- nrow(ft_grp)
+  #check for effect
+  ft_grp_e <- F #default
+  if(sig_ft_grp >= 5){
+   ft_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_grp"]] <-ft_grp_e
+  #keep environemnt clean
+  rm(ft_ipw, ft_grp, ft_dyn, ft_dyn_e, ft_grp_e)
+
+
+  rr_ipw <- ipw_sig%>%filter(gname=="nta1_periode")
+
+  rr_dyn <- rr_ipw%>%filter(type=="dynamic")
+  sig_rr_dyn <- nrow(rr_dyn)
+  #check for effect
+  rr_dyn_e <- F#default
+  if(sig_rr_dyn >= 5){
+   rr_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_dyn"]] <-rr_dyn_e
+
+
+
+  rr_grp <- rr_ipw%>%filter(type=="group")
+  sig_rr_grp <- nrow(rr_grp)
+  #check for effect
+  rr_grp_e <- F#default
+  if(sig_rr_grp >= 5){
+   rr_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_grp"]] <-rr_grp_e
+
+
+  rm(rr_ipw, rr_grp, rr_dyn, rr_grp_e, rr_dyn_e)
+
+
+  st_ipw <- ipw_sig%>%filter(gname=="st_periode")
+
+  st_dyn <- st_ipw%>%filter(type=="dynamic")
+  sig_st_dyn <- nrow(st_dyn)
+  #check for effect
+  st_dyn_e <- F#default
+  if(sig_st_dyn >= 5){
+   st_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["st_dyn"]] <-st_dyn_e
+
+  st_grp <- st_ipw%>%filter(type=="group")
+  sig_st_grp <- nrow(st_grp)
+  #check for effect
+  st_grp_e <- F#default
+ if(sig_st_grp >= 5){
+   st_grp_e <- T
+  }
+
+  dim_list[["st_grp"]] <- st_grp_e  
+  level_list[[level_vec[z]]] <- dim_list
+
+ }
+ #save true or false for effect
+ level_list[["dimension"]] <- dim_vec[[i]]
+ effect_ipw_list[[dim_vec[i]]] <-level_list
+
+
+ #effect_list[[dim_vec[i]]] <- dim_list
+ rm(st_ipw, st_grp_e,st_dyn_e,st_dyn,st_grp)
+}
+
+```
+
+#reg estimator
+
+```{r}
+
+reg_raw <- read_excel("~/rent_control/output/modelle/DF_reg_models.xlsx")
+
+
+#clean first columne 
+#get new columnes for all informations int the fitrst one
+
+reg_hp <- reg_raw %>% filter(grepl('hp_', row_names))
+reg_hp$Level <- "expensive" 
+
+reg_mp <- reg_raw %>% filter(grepl('mp_', row_names))
+reg_mp$Level <- "medium" 
+
+reg_lp <- reg_raw %>% filter(grepl('lp_', row_names))
+reg_lp$Level <- "affordable" 
+
+
+
+#all data set with pric class
+reg_pc <- rbind(reg_hp,reg_lp,reg_mp)
+reg_pc_names <- levels(as.factor(reg_pc$row_names))
+#the city level is missing a tag, therfore it muss be the eft over cases
+reg_tc <- reg_raw%>%filter(!row_names %in% reg_pc_names)
+reg_tc$Level <- "city" 
+#bind again all together
+reg_raw <- rbind(reg_pc, reg_tc)
+
+#keep the environment clean
+rm(reg_hp,reg_lp,reg_mp,reg_pc,reg_pc_names,reg_tc)
+
+
+
+
+
+#dimension 
+reg_inv <- reg_raw %>% filter(grepl('_inv_', row_names))
+reg_inv$Dimension <- "Investment ratio"
+
+reg_fo <- reg_raw %>% filter(grepl('_Erstbezug_', row_names))#erst sanierungs cases entfernen
+reg_fo$Dimension <- "First occupancy"
+
+reg_esan <- reg_fo %>% filter(grepl('_Erstbezug_nach_Sanierung_', row_names))
+reg_esan$Dimension <- "First occupancy after reconstruction"
+
+esan_names <- levels(as.factor(reg_esan$row_names))
+reg_erst <- reg_fo%>%filter(!row_names%in%esan_names)
+rm(reg_fo)
+
+reg_wk <- reg_raw %>% filter(grepl('_Gepflegt_', row_names))
+reg_wk$Dimension <- "Well-kempt"
+
+reg_lnew <- reg_raw %>% filter(grepl('_Neuwertig_', row_names))
+reg_lnew$Dimension <- "Like new"
+
+reg_nren <- reg_raw %>% filter(grepl('_Renovierungsbeduerftig_', row_names))
+reg_nren$Dimension <- "Needs renovation"
+
+reg_ucon <- reg_raw %>% filter(grepl('_Unbekannter_Zustand_', row_names))
+reg_ucon$Dimension <- "Unknown condition"
+
+reg_cren <- reg_raw %>% filter(grepl('Vollstaendig_Renoviert', row_names))
+reg_cren$Dimension <- "Completely renovated"
+
+reg_rec <- reg_raw %>% filter(grepl('_saniert_', row_names))
+reg_rec$Dimension <- "Reconstructed"
+
+reg_mod <- reg_raw %>% filter(grepl('_Modernisiert_', row_names))
+reg_mod$Dimension <- "Modernised"
+
+reg_abb <- reg_raw %>% filter(grepl('Abbruchreif_', row_names))
+reg_abb$Dimension <- "Ready to demolish"
+
+reg_bya <- reg_raw %>% filter(grepl('Nach_Vereinbarung', row_names))
+reg_bya$Dimension <- "By agreement"
+
+
+reg <- rbind(reg_bya,
+             reg_abb,
+             reg_mod,
+             reg_cren,
+             reg_erst,
+             reg_esan,
+             reg_inv,
+             reg_lnew,
+             reg_nren,
+             reg_ucon,
+             reg_wk,
+             reg_rec
+             )
+#keept the environment free
+rm(esan_names,reg_bya,
+             reg_abb,
+             reg_mod,
+             reg_cren,
+             reg_erst,
+             reg_esan,
+             reg_inv,
+             reg_lnew,
+             reg_nren,
+             reg_ucon,
+             reg_wk,
+             reg_rec)
+
+
+
+#vector with all dimension data frame names
+dim_vec <- c("Investment ratio",
+             "First occupancy",
+             "First occupancy after reconstruction",
+             "Like new",
+             "Modernised",
+             "Reconstructed",
+             "Completely renovated",
+             "Well-kempt",
+             "Needs renovation",
+             "By agreement",
+             "Unknown condition",
+             "Ready to demolish")
+
+level_vec<- c("city","expensive","medium","affordable")
+dim_list <- list()
+effect_reg_list <-list()
+
+for (i in 1:length(dim_vec)) {
+  
+
+ #welhe daten sollen betrachtet werden
+ reg_df <- reg%>%filter(Dimension==dim_vec[[i]]) #dimension die man betrachten möchte
+
+ level_list <- list()
+ for (z in 1:length(level_vec)) {
+  
+
+  reg_df2 <- reg_df%>%filter(Level==level_vec[[z]])
+  #nur noch significante modelle
+  reg_sig <- reg_df2%>%filter(is.na(sig_5)==F)
+
+
+  #Rent control first time
+  ft_reg <- reg_sig%>%filter(gname=="ft_periode")
+  #Rent control first time dynamic
+  ft_dyn <- ft_reg%>%filter(type=="dynamic")
+  sig_ft_dyn <- nrow(ft_dyn)
+  #check for effect
+  ft_dyn_e <- F
+  if(sig_ft_dyn >= 5){
+   ft_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_dyn"]] <-ft_dyn_e
+
+  #rent control first time group
+  ft_grp <- ft_reg%>%filter(type=="group")
+  sig_ft_grp <- nrow(ft_grp)
+  #check for effect
+  ft_grp_e <- F #default
+  if(sig_ft_grp >= 5){
+   ft_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_grp"]] <-ft_grp_e
+  #keep environemnt clean
+  rm(ft_reg, ft_grp, ft_dyn, ft_dyn_e, ft_grp_e)
+
+
+  rr_reg <- reg_sig%>%filter(gname=="nta1_periode")
+
+  rr_dyn <- rr_reg%>%filter(type=="dynamic")
+  sig_rr_dyn <- nrow(rr_dyn)
+  #check for effect
+  rr_dyn_e <- F#default
+  if(sig_rr_dyn >= 5){
+   rr_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_dyn"]] <-rr_dyn_e
+
+
+
+  rr_grp <- rr_reg%>%filter(type=="group")
+  sig_rr_grp <- nrow(rr_grp)
+  #check for effect
+  rr_grp_e <- F#default
+  if(sig_rr_grp >= 5){
+   rr_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_grp"]] <-rr_grp_e
+
+
+  rm(rr_reg, rr_grp, rr_dyn, rr_grp_e, rr_dyn_e)
+
+
+  st_reg <- reg_sig%>%filter(gname=="st_periode")
+
+  st_dyn <- st_reg%>%filter(type=="dynamic")
+  sig_st_dyn <- nrow(st_dyn)
+  #check for effect
+  st_dyn_e <- F#default
+  if(sig_st_dyn >= 5){
+   st_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["st_dyn"]] <-st_dyn_e
+
+  st_grp <- st_reg%>%filter(type=="group")
+  sig_st_grp <- nrow(st_grp)
+  #check for effect
+  st_grp_e <- F#default
+ if(sig_st_grp >= 5){
+   st_grp_e <- T
+  }
+
+  dim_list[["st_grp"]] <- st_grp_e  
+  level_list[[level_vec[z]]] <- dim_list
+
+ }
+ #save true or false for effect
+ level_list[["dimension"]] <- dim_vec[[i]]
+ effect_reg_list[[dim_vec[i]]] <-level_list
+
+
+ #effect_list[[dim_vec[i]]] <- dim_list
+ rm(st_reg, st_grp_e,st_dyn_e,st_dyn,st_grp)
+}
+
+```
+
+
+
+#north models
+
+```{r}
+north_raw <- read_csv("~/rent_control/output/modelle/df_RC_reg_n.csv")
+
+
+#clean first columne 
+#get new columnes for all informations int the fitrst one
+
+north_hp <- north_raw %>% filter(grepl('hp_', row_names))
+north_hp$Level <- "expensive" 
+
+north_mp <- north_raw %>% filter(grepl('mp_', row_names))
+north_mp$Level <- "medium" 
+
+north_lp <- north_raw %>% filter(grepl('lp_', row_names))
+north_lp$Level <- "affordable" 
+
+
+
+#all data set with pric class
+north_pc <- rbind(north_hp,north_lp,north_mp)
+north_pc_names <- levels(as.factor(north_pc$row_names))
+#the city level is missing a tag, therfore it muss be the eft over cases
+north_tc <- north_raw%>%filter(!row_names %in% north_pc_names)
+north_tc$Level <- "city" 
+#bind again all together
+north_raw <- rbind(north_pc, north_tc)
+
+#keep the environment clean
+rm(north_hp,north_lp,north_mp,north_pc,north_pc_names,north_tc)
+
+
+
+
+
+#dimension 
+north_inv <- north_raw %>% filter(grepl('_inv_', row_names))
+north_inv$Dimension <- "Investment ratio"
+
+north_fo <- north_raw %>% filter(grepl('_Erstbezug_', row_names))#erst sanierungs cases entfernen
+north_fo$Dimension <- "First occupancy"
+
+north_esan <- north_fo %>% filter(grepl('_Erstbezug_nach_Sanierung_', row_names))
+north_esan$Dimension <- "First occupancy after reconstruction"
+
+esan_names <- levels(as.factor(north_esan$row_names))
+north_erst <- north_fo%>%filter(!row_names%in%esan_names)
+rm(north_fo)
+
+north_wk <- north_raw %>% filter(grepl('_Gepflegt_', row_names))
+north_wk$Dimension <- "Well-kempt"
+
+north_lnew <- north_raw %>% filter(grepl('_Neuwertig_', row_names))
+north_lnew$Dimension <- "Like new"
+
+north_nren <- north_raw %>% filter(grepl('_Renovierungsbeduerftig_', row_names))
+north_nren$Dimension <- "Needs renovation"
+
+north_ucon <- north_raw %>% filter(grepl('_Unbekannter_Zustand_', row_names))
+north_ucon$Dimension <- "Unknown condition"
+
+north_cren <- north_raw %>% filter(grepl('Vollstaendig_Renoviert', row_names))
+north_cren$Dimension <- "Completely renovated"
+
+north_rec <- north_raw %>% filter(grepl('_saniert_', row_names))
+north_rec$Dimension <- "Reconstructed"
+
+north_mod <- north_raw %>% filter(grepl('_Modernisiert_', row_names))
+north_mod$Dimension <- "Modernised"
+
+north_abb <- north_raw %>% filter(grepl('Abbruchreif_', row_names))
+north_abb$Dimension <- "Ready to demolish"
+
+north_bya <- north_raw %>% filter(grepl('Nach_Vereinbarung', row_names))
+north_bya$Dimension <- "By agreement"
+
+
+north <- rbind(north_bya,
+             north_abb,
+             north_mod,
+             north_cren,
+             north_erst,
+             north_esan,
+             north_inv,
+             north_lnew,
+             north_nren,
+             north_ucon,
+             north_wk,
+             north_rec
+             )
+#keept the environment free
+rm(esan_names,north_bya,
+             north_abb,
+             north_mod,
+             north_cren,
+             north_erst,
+             north_esan,
+             north_inv,
+             north_lnew,
+             north_nren,
+             north_ucon,
+             north_wk,
+             north_rec)
+
+
+
+#vector with all dimension data frame names
+dim_vec <- c("Investment ratio",
+             "First occupancy",
+             "First occupancy after reconstruction",
+             "Like new",
+             "Modernised",
+             "Reconstructed",
+             "Completely renovated",
+             "Well-kempt",
+             "Needs renovation",
+             "By agreement",
+             "Unknown condition",
+             "Ready to demolish")
+
+level_vec<- c("city","expensive","medium","affordable")
+dim_list <- list()
+effect_north_list <-list()
+
+for (i in 1:length(dim_vec)) {
+  
+
+ #welhe daten sollen betrachtet werden
+ north_df <- north%>%filter(Dimension==dim_vec[[i]]) #dimension die man betrachten möchte
+
+ level_list <- list()
+ for (z in 1:length(level_vec)) {
+  
+
+  north_df2 <- north_df%>%filter(Level==level_vec[[z]])
+  #nur noch significante modelle
+  north_sig <- north_df2%>%filter(is.na(sig_5)==F)
+
+
+  #Rent control first time
+  ft_north <- north_sig%>%filter(gname=="ft_periode")
+  #Rent control first time dynamic
+  ft_dyn <- ft_north%>%filter(type=="dynamic")
+  sig_ft_dyn <- nrow(ft_dyn)
+  #check for effect
+  ft_dyn_e <- F
+  if(sig_ft_dyn >= 5){
+   ft_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_dyn"]] <-ft_dyn_e
+
+  #rent control first time group
+  ft_grp <- ft_north%>%filter(type=="group")
+  sig_ft_grp <- nrow(ft_grp)
+  #check for effect
+  ft_grp_e <- F #default
+  if(sig_ft_grp >= 5){
+   ft_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_grp"]] <-ft_grp_e
+  #keep environemnt clean
+  rm(ft_north, ft_grp, ft_dyn, ft_dyn_e, ft_grp_e)
+
+
+  rr_north <- north_sig%>%filter(gname=="nta1_periode")
+
+  rr_dyn <- rr_north%>%filter(type=="dynamic")
+  sig_rr_dyn <- nrow(rr_dyn)
+  #check for effect
+  rr_dyn_e <- F#default
+  if(sig_rr_dyn >= 5){
+   rr_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_dyn"]] <-rr_dyn_e
+
+
+
+  rr_grp <- rr_north%>%filter(type=="group")
+  sig_rr_grp <- nrow(rr_grp)
+  #check for effect
+  rr_grp_e <- F#default
+  if(sig_rr_grp >= 5){
+   rr_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_grp"]] <-rr_grp_e
+
+
+  rm(rr_north, rr_grp, rr_dyn, rr_grp_e, rr_dyn_e)
+
+
+  st_north <- north_sig%>%filter(gname=="st_periode")
+
+  st_dyn <- st_north%>%filter(type=="dynamic")
+  sig_st_dyn <- nrow(st_dyn)
+  #check for effect
+  st_dyn_e <- F#default
+  if(sig_st_dyn >= 5){
+   st_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["st_dyn"]] <-st_dyn_e
+
+  st_grp <- st_north%>%filter(type=="group")
+  sig_st_grp <- nrow(st_grp)
+  #check for effect
+  st_grp_e <- F#default
+ if(sig_st_grp >= 5){
+   st_grp_e <- T
+  }
+
+  dim_list[["st_grp"]] <- st_grp_e
+  level_list[[level_vec[z]]] <- dim_list
+
+ }
+ #save true or false for effect
+ level_list[["dimension"]] <- dim_vec[[i]]
+ effect_north_list[[dim_vec[i]]] <-level_list
+
+
+ #effect_list[[dim_vec[i]]] <- dim_list
+ rm(st_north, st_grp_e,st_dyn_e,st_dyn,st_grp)
+}
+
+```
+
+
+
+
+#south models
+```{r}
+south_raw <- read_csv("~/rent_control/output/modelle/df_RC_reg_s.csv")
+
+
+#clean first columne 
+#get new columnes for all informations int the fitrst one
+
+south_hp <- south_raw %>% filter(grepl('hp_', row_names))
+south_hp$Level <- "expensive" 
+
+south_mp <- south_raw %>% filter(grepl('mp_', row_names))
+south_mp$Level <- "medium" 
+
+south_lp <- south_raw %>% filter(grepl('lp_', row_names))
+south_lp$Level <- "affordable" 
+
+
+
+#all data set with pric class
+south_pc <- rbind(south_hp,south_lp,south_mp)
+south_pc_names <- levels(as.factor(south_pc$row_names))
+#the city level is missing a tag, therfore it muss be the eft over cases
+south_tc <- south_raw%>%filter(!row_names %in% south_pc_names)
+south_tc$Level <- "city" 
+#bind again all together
+south_raw <- rbind(south_pc, south_tc)
+
+#keep the environment clean
+rm(south_hp,south_lp,south_mp,south_pc,south_pc_names,south_tc)
+
+
+
+
+
+#dimension 
+south_inv <- south_raw %>% filter(grepl('_inv_', row_names))
+south_inv$Dimension <- "Investment ratio"
+
+south_fo <- south_raw %>% filter(grepl('_Erstbezug_', row_names))#erst sanierungs cases entfernen
+south_fo$Dimension <- "First occupancy"
+
+south_esan <- south_fo %>% filter(grepl('_Erstbezug_nach_Sanierung_', row_names))
+south_esan$Dimension <- "First occupancy after reconstruction"
+
+esan_names <- levels(as.factor(south_esan$row_names))
+south_erst <- south_fo%>%filter(!row_names%in%esan_names)
+rm(south_fo)
+
+south_wk <- south_raw %>% filter(grepl('_Gepflegt_', row_names))
+south_wk$Dimension <- "Well-kempt"
+
+south_lnew <- south_raw %>% filter(grepl('_Neuwertig_', row_names))
+south_lnew$Dimension <- "Like new"
+
+south_nren <- south_raw %>% filter(grepl('_Renovierungsbeduerftig_', row_names))
+south_nren$Dimension <- "Needs renovation"
+
+south_ucon <- south_raw %>% filter(grepl('_Unbekannter_Zustand_', row_names))
+south_ucon$Dimension <- "Unknown condition"
+
+south_cren <- south_raw %>% filter(grepl('Vollstaendig_Renoviert', row_names))
+south_cren$Dimension <- "Completely renovated"
+
+south_rec <- south_raw %>% filter(grepl('_saniert_', row_names))
+south_rec$Dimension <- "Reconstructed"
+
+south_mod <- south_raw %>% filter(grepl('_Modernisiert_', row_names))
+south_mod$Dimension <- "Modernised"
+
+south_abb <- south_raw %>% filter(grepl('Abbruchreif_', row_names))
+south_abb$Dimension <- "Ready to demolish"
+
+south_bya <- south_raw %>% filter(grepl('Nach_Vereinbarung', row_names))
+south_bya$Dimension <- "By agreement"
+
+
+south <- rbind(south_bya,
+             south_abb,
+             south_mod,
+             south_cren,
+             south_erst,
+             south_esan,
+             south_inv,
+             south_lnew,
+             south_nren,
+             south_ucon,
+             south_wk,
+             south_rec
+             )
+#keept the environment free
+rm(esan_names,south_bya,
+             south_abb,
+             south_mod,
+             south_cren,
+             south_erst,
+             south_esan,
+             south_inv,
+             south_lnew,
+             south_nren,
+             south_ucon,
+             south_wk,
+             south_rec)
+
+
+
+#vector with all dimension data frame names
+dim_vec <- c("Investment ratio",
+             "First occupancy",
+             "First occupancy after reconstruction",
+             "Like new",
+             "Modernised",
+             "Reconstructed",
+             "Completely renovated",
+             "Well-kempt",
+             "Needs renovation",
+             "By agreement",
+             "Unknown condition",
+             "Ready to demolish")
+
+level_vec<- c("city","expensive","medium","affordable")
+dim_list <- list()
+effect_south_list <-list()
+
+for (i in 1:length(dim_vec)) {
+  
+
+ #welhe daten sollen betrachtet werden
+ south_df <- south%>%filter(Dimension==dim_vec[[i]]) #dimension die man betrachten möchte
+
+ level_list <- list()
+ for (z in 1:length(level_vec)) {
+  
+
+  south_df2 <- south_df%>%filter(Level==level_vec[[z]])
+  #nur noch significante modelle
+  south_sig <- south_df2%>%filter(is.na(sig_5)==F)
+
+
+  #Rent control first time
+  ft_south <- south_sig%>%filter(gname=="ft_periode")
+  #Rent control first time dynamic
+  ft_dyn <- ft_south%>%filter(type=="dynamic")
+  sig_ft_dyn <- nrow(ft_dyn)
+  #check for effect
+  ft_dyn_e <- F
+  if(sig_ft_dyn >= 5){
+   ft_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_dyn"]] <-ft_dyn_e
+
+  #rent control first time group
+  ft_grp <- ft_south%>%filter(type=="group")
+  sig_ft_grp <- nrow(ft_grp)
+  #check for effect
+  ft_grp_e <- F #default
+  if(sig_ft_grp >= 5){
+   ft_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["ft_grp"]] <-ft_grp_e
+  #keep environemnt clean
+  rm(ft_south, ft_grp, ft_dyn, ft_dyn_e, ft_grp_e)
+
+
+  rr_south <- south_sig%>%filter(gname=="nta1_periode")
+
+  rr_dyn <- rr_south%>%filter(type=="dynamic")
+  sig_rr_dyn <- nrow(rr_dyn)
+  #check for effect
+  rr_dyn_e <- F#default
+  if(sig_rr_dyn >= 5){
+   rr_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_dyn"]] <-rr_dyn_e
+
+
+
+  rr_grp <- rr_south%>%filter(type=="group")
+  sig_rr_grp <- nrow(rr_grp)
+  #check for effect
+  rr_grp_e <- F#default
+  if(sig_rr_grp >= 5){
+   rr_grp_e <- T
+  }
+  #save true or false for effect
+  dim_list[["rr_grp"]] <-rr_grp_e
+
+
+  rm(rr_south, rr_grp, rr_dyn, rr_grp_e, rr_dyn_e)
+
+
+  st_south <- south_sig%>%filter(gname=="st_periode")
+
+  st_dyn <- st_south%>%filter(type=="dynamic")
+  sig_st_dyn <- nrow(st_dyn)
+  #check for effect
+  st_dyn_e <- F#default
+  if(sig_st_dyn >= 5){
+   st_dyn_e <- T
+  }
+  #save true or false for effect
+  dim_list[["st_dyn"]] <-st_dyn_e
+
+  st_grp <- st_south%>%filter(type=="group")
+  sig_st_grp <- nrow(st_grp)
+  #check for effect
+  st_grp_e <- F#default
+ if(sig_st_grp >= 5){
+   st_grp_e <- T
+  }
+
+  dim_list[["st_grp"]] <- st_grp_e
+  level_list[[level_vec[z]]] <- dim_list
+
+ }
+ #save true or false for effect
+ level_list[["dimension"]] <- dim_vec[[i]]
+ effect_south_list[[dim_vec[i]]] <-level_list
+
+
+ #effect_list[[dim_vec[i]]] <- dim_list
+ rm(st_south, st_grp_e,st_dyn_e,st_dyn,st_grp)
+}
+
+```
+
+
+
+
+
+
+
+List of differences!
+
+```{r}
+#get tables that show effects
+reg_ta <- rbindlist(effect_reg_list)
+ipw_ta <- rbindlist(effect_ipw_list)
+north_ta <- rbindlist(effect_north_list)
+south_ta <- rbindlist(effect_south_list)
+
+
+
+#wide to long format
+reg_ta <- reg_ta%>%pivot_longer(!dimension, names_to = "level")
+reg_ta$mod <- "reg"
+
+ipw_ta <- ipw_ta%>%pivot_longer(!dimension, names_to = "level")
+ipw_ta$mod <- "ipw"
+
+north_ta <- north_ta%>%pivot_longer(!dimension, names_to = "level")
+north_ta$mod <- "north"
+
+south_ta <- south_ta%>%pivot_longer(!dimension, names_to = "level")
+south_ta$mod <- "south"
+
+
+
+#bind all tables
+M_table <- rbind(reg_ta,ipw_ta,north_ta,south_ta)
+M_table <- as.data.frame(M_table)
+
+
+
+```
+
+
+
+```{r}
+
+ef <- south%>%
+  filter(Dimension=="Completely renovated")%>%
+  filter(Level=="medium")%>%
+  filter(gname=="st_periode")%>%
+  filter(type=="group")
+  
+
+ef$p_n
+
+
+
+```
+
